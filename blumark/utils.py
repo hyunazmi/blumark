@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from . import __version__
+
 APP_NAME = "Blumark"
+APP_TITLE = f"{APP_NAME} v{__version__}"
 
 Rect = tuple[int, int, int, int]
 

@@ -4,10 +4,19 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QFontDatabase, QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QFontDatabase,
+    QGuiApplication,
+    QKeySequence,
+    QShortcut,
+)
 from PySide6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer, QVideoSink
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -17,6 +26,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QSizePolicy,
+    QSpinBox,
     QToolBar,
     QToolButton,
     QVBoxLayout,
@@ -31,7 +41,7 @@ from .exporter import ExportWorker
 from .ffmpeg_dialog import FFmpegDialog
 from .ffmpeg_tools import available_encoders, ffmpeg_version, resolve_ffmpeg
 from .settings import AppSettings
-from .utils import APP_NAME, VIDEO_EXTS, format_time, video_file_filter
+from .utils import APP_TITLE, VIDEO_EXTS, format_time, video_file_filter
 from .video_canvas import VideoCanvas
 from .video_info import VideoInfo, probe
 from .widgets import IconLabel, JumpSlider
@@ -43,12 +53,16 @@ HARDWARE_CHECK_DELAY_MS = 800
 WORKER_STOP_TIMEOUT_MS = 15000
 STATUS_MESSAGE_MS = 8000
 TIME_TEMPLATE = "00:00.00 / 00:00.00"
+CROP_PRESETS = tuple(
+    sorted(((1, 1), (9, 16), (4, 5), (3, 4), (4, 3), (16, 9)), key=lambda ratio: ratio[0] / ratio[1])
+)
+CUSTOM_RATIO_MAX = 100
 
 
 class MainWindow(QMainWindow):
     def __init__(self, initial_path: str | None = None):
         super().__init__()
-        self.setWindowTitle(APP_NAME)
+        self.setWindowTitle(APP_TITLE)
         self.setMinimumSize(820, 560)
         self.resize(1100, 720)
         self.setAcceptDrops(True)
@@ -215,6 +229,19 @@ class MainWindow(QMainWindow):
             slider.valueChanged.connect(self._push_blur_settings)
         self._preview_check.toggled.connect(self._push_blur_settings)
 
+        self._add_button = QToolButton()
+        self._add_button.setText("&Add")
+        self._add_button.setIcon(icons.icon("plus", 18))
+        self._add_button.setIconSize(QSize(18, 18))
+        self._add_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._add_button.setToolTip("Add a watermark area")
+        self._add_button.setAutoRaise(True)
+        self._add_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._add_button.clicked.connect(lambda: self._canvas.add_area())
+        self._toolbar.addWidget(self._add_button)
+
+        self._build_crop_menu()
+
         settings_menu = QMenu(self)
         self._settings_button = self._menu_button(
             "&Settings", "sliders-horizontal", settings_menu
@@ -225,6 +252,76 @@ class MainWindow(QMainWindow):
         export_action = QAction(icons.icon("film"), "Export settings...", self)
         export_action.triggered.connect(self.open_export_settings)
         settings_menu.addAction(export_action)
+
+    def _build_crop_menu(self) -> None:
+        crop_menu = QMenu(self)
+        self._crop_button = self._menu_button("&Crop", "crop", crop_menu)
+        self._crop_group = QActionGroup(self)
+        self._crop_group.setExclusive(True)
+        self._crop_choices: dict[QAction, tuple[bool, float | None]] = {}
+        self._custom_ratio = (5, 7)
+
+        def add(text: str, enabled: bool, ratio: float | None) -> QAction:
+            action = QAction(text, self)
+            action.setCheckable(True)
+            self._crop_group.addAction(action)
+            crop_menu.addAction(action)
+            self._crop_choices[action] = (enabled, ratio)
+            return action
+
+        self._crop_off_action = add("No crop", False, None)
+        self._crop_off_action.setChecked(True)
+        self._crop_current = self._crop_off_action
+        add("Free", True, None)
+        crop_menu.addSeparator()
+        for width, height in CROP_PRESETS:
+            add(f"{width}:{height}", True, width / height)
+        crop_menu.addSeparator()
+        self._crop_custom_action = add("Custom ratio...", True, None)
+        self._crop_group.triggered.connect(self._on_crop_action)
+
+    def _on_crop_action(self, action: QAction) -> None:
+        if action is self._crop_custom_action:
+            ratio = self._ask_custom_ratio()
+            if ratio is None:
+                self._crop_current.setChecked(True)
+                return
+            width, height = ratio
+            self._custom_ratio = ratio
+            action.setText(f"Custom ({width}:{height})...")
+            self._crop_choices[action] = (True, width / height)
+        self._apply_crop_choice(action)
+
+    def _apply_crop_choice(self, action: QAction) -> None:
+        enabled, ratio = self._crop_choices[action]
+        self._crop_current = action
+        self._canvas.set_crop(enabled, ratio)
+
+    def _ask_custom_ratio(self) -> tuple[int, int] | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Custom crop ratio")
+        layout = QVBoxLayout(dialog)
+        row = QHBoxLayout()
+        boxes = []
+        for index, value in enumerate(self._custom_ratio):
+            box = QSpinBox()
+            box.setRange(1, CUSTOM_RATIO_MAX)
+            box.setValue(value)
+            boxes.append(box)
+            row.addWidget(box)
+            if index == 0:
+                row.addWidget(QLabel(":"))
+        layout.addLayout(row)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        result = (boxes[0].value(), boxes[1].value()) if accepted else None
+        dialog.deleteLater()
+        return result
 
     def _build_corner(self) -> None:
         self._corner = QWidget()
@@ -305,7 +402,8 @@ class MainWindow(QMainWindow):
     def _set_loaded(self, loaded: bool) -> None:
         for widget in (
             self._slider, self._prev_button, self._play_button, self._next_button,
-            self._export_button, self._export_action,
+            self._export_button, self._export_action, self._add_button,
+            self._crop_button,
         ):
             widget.setEnabled(loaded)
 
@@ -315,6 +413,8 @@ class MainWindow(QMainWindow):
         for widget in (self._slider, self._prev_button, self._play_button, self._next_button):
             widget.setEnabled(not busy and loaded)
         self._blur_button.setEnabled(not busy)
+        self._add_button.setEnabled(not busy and loaded)
+        self._crop_button.setEnabled(not busy and loaded)
         self._settings_button.setEnabled(not busy)
         self._open_action.setEnabled(not busy)
         self._export_action.setEnabled(not busy and loaded)
@@ -345,7 +445,7 @@ class MainWindow(QMainWindow):
 
         self._canvas.set_video(info.width, info.height)
         self._push_blur_settings()
-        self.setWindowTitle(f"{os.path.basename(path)} - {APP_NAME}")
+        self.setWindowTitle(f"{os.path.basename(path)} - {APP_TITLE}")
         self._progress.setValue(0)
 
         self._on_duration(info.duration_ms)
@@ -355,6 +455,10 @@ class MainWindow(QMainWindow):
         player.setSource(QUrl.fromLocalFile(path))
         player.pause()
         self._update_time()
+        self.statusBar().showMessage(
+            "Click Add to mark a watermark area, or use Crop to pick a frame ratio.",
+            STATUS_MESSAGE_MS,
+        )
 
     @staticmethod
     def _video_from_mime(mime) -> str | None:
@@ -477,13 +581,23 @@ class MainWindow(QMainWindow):
             hardware.ensure_probe(path)
 
     def open_export_settings(self) -> None:
-        size = (self._info.width, self._info.height) if self._info else None
+        size = None
+        if self._info is not None:
+            crop = self._canvas.crop_rect()
+            size = (crop.width(), crop.height()) if crop else (self._info.width, self._info.height)
         dialog = ExportSettingsDialog(self._settings, self, size)
         dialog.exec()
         dialog.deleteLater()
 
     def export_video(self) -> None:
         if self._info is None or self._worker is not None:
+            return
+        if not self._canvas.has_areas() and self._canvas.crop_rect() is None:
+            QMessageBox.information(
+                self,
+                "Nothing to export",
+                "Click Add to mark a watermark area, or pick a ratio in Crop, first.",
+            )
             return
         ffmpeg = self._usable_ffmpeg()
         if ffmpeg is None:
@@ -577,7 +691,9 @@ class MainWindow(QMainWindow):
 
     def _start_export(self, ffmpeg: str, destination: str, options: ExportOptions) -> None:
         self.player.pause()
-        roi = self._canvas.roi()
+        rects = [(r.x(), r.y(), r.width(), r.height()) for r in self._canvas.rois()]
+        crop = self._canvas.crop_rect()
+        crop_rect = (crop.x(), crop.y(), crop.width(), crop.height()) if crop else None
         self._progress.setValue(0)
         self._set_busy(True)
 
@@ -585,10 +701,11 @@ class MainWindow(QMainWindow):
             ffmpeg,
             self._info.path,
             destination,
-            (roi.x(), roi.y(), roi.width(), roi.height()),
+            rects,
             self._strength_slider.value(),
             self._feather_slider.value(),
             options,
+            crop_rect,
             self,
         )
         worker.progress.connect(self._progress.setValue)

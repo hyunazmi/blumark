@@ -67,10 +67,11 @@ class ExportWorker(QThread):
         ffmpeg: str,
         source: str,
         destination: str,
-        rect: Rect,
+        rects: list[Rect],
         strength: int,
         feather: int,
         options: ExportOptions | None = None,
+        crop: Rect | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -78,7 +79,8 @@ class ExportWorker(QThread):
         self._source = source
         self._destination = destination
         self._partial = destination + PARTIAL_SUFFIX
-        self._rect = rect
+        self._rects = list(rects)
+        self._crop = crop
         self._strength = strength
         self._feather = feather
         self._options = (options or ExportOptions()).validated()
@@ -110,9 +112,10 @@ class ExportWorker(QThread):
         log = tempfile.TemporaryFile()
         try:
             self._check_audio_copy()
+            self._crop = self._fit_crop(info.width, info.height)
+            size = (self._crop[2], self._crop[3]) if self._crop else (info.width, info.height)
             command = build_command(
-                self._ffmpeg, self._source, self._partial,
-                (info.width, info.height), info.fps, self._options,
+                self._ffmpeg, self._source, self._partial, size, info.fps, self._options,
             )
             process = subprocess.Popen(
                 command,
@@ -149,15 +152,32 @@ class ExportWorker(QThread):
                 process.wait()
             log.close()
 
+    def _fit_crop(self, width: int, height: int) -> Rect | None:
+        if self._crop is None:
+            return None
+        x, y, crop_width, crop_height = (int(value) for value in self._crop)
+        crop_width = max(2, min(crop_width, width) // 2 * 2)
+        crop_height = max(2, min(crop_height, height) // 2 * 2)
+        x = max(0, min(x, width - crop_width))
+        y = max(0, min(y, height - crop_height))
+        return x, y, crop_width, crop_height
+
     def _feed(self, process: subprocess.Popen, capture, frame, total: int) -> bool:
+        import numpy as np
+
         from .blur import apply_blur
 
         written = 0
         ok = True
         while ok and not self._cancel.is_set():
-            apply_blur(frame, self._rect, self._strength, self._feather)
+            for rect in self._rects:
+                apply_blur(frame, rect, self._strength, self._feather)
+            output = frame
+            if self._crop is not None:
+                x, y, crop_width, crop_height = self._crop
+                output = np.ascontiguousarray(frame[y:y + crop_height, x:x + crop_width])
             try:
-                process.stdin.write(frame.data)
+                process.stdin.write(output.data)
             except OSError:
                 return True
             self._last_activity = time.monotonic()
