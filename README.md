@@ -1,7 +1,11 @@
 # Blumark
 
-Blumark adalah aplikasi berbasis GUI yang dikembangkan menggunakan bahasa pemrograman Python untuk menimpa watermark yang terdapat pada video.
+Blumark adalah aplikasi GUI (Graphical User Interface) sederhana untuk menimpa watermark yang terdapat pada video.
 
+## Persyaratan
+- [Python 3.10+](https://www.python.org/downloads/)
+- [FFmpeg](https://ffmpeg.org/)
+  
 ## Cara Instal
 
 ```
