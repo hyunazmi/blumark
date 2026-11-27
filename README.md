@@ -1,6 +1,6 @@
 # Blumark
 
-<img src="https://github.com/hyunazmi/blumark/blob/main/assets/v1.0.0.png" width="600">
+<img src="https://github.com/hyunazmi/blumark/blob/main/assets/v1.0.2.png" width="600">
 
 Blumark adalah aplikasi GUI (Graphical User Interface) sederhana untuk menimpa watermark yang terdapat pada video.
 
