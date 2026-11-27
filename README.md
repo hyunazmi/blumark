@@ -11,12 +11,11 @@ Blumark adalah aplikasi GUI (Graphical User Interface) sederhana untuk menimpa w
 ## Cara Instal
 
 ```
+sudo apt update
+sudo apt install -y git ffmpeg python3-numpy python3-opencv python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets python3-pyside6.qtmultimedia python3-pyside6.qtsvg
 git clone https://github.com/hyunazmi/blumark.git
 cd blumark
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install .
+python3 -m blumark
 ```
 
 ## Lisensi
